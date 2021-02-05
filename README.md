@@ -13,4 +13,4 @@ A small setup guide in Russian in the file "GOSTWELD2_descr_RU.pdf".
 ![Preview image](https://github.com/Lab-V/CATIA_GOST_WELD_SYMBOL/blob/main/GOSTWELD2.jpg)
 
 You can find more examples on the forum:
-[More info](http://www.plm-forum.ru/forum/)
+[plm-forum.ru](http://www.plm-forum.ru/forum/)
