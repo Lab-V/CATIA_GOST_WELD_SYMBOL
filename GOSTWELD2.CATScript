@@ -1,0 +1,643 @@
+Option Explicit
+
+'	COPYRIGHT DASSAULT SYSTÈMES 2007-2008
+' 	****************************************************************************
+' 	Purpose			:	To draw a weld description according with Russian factory standards
+' 	Author				:	Ilias Ilmambetov - lab.virtuosity.ru
+'	Based on			:	V5Automation guide and online forums
+' 	Languages		:	VBScript
+' 	CATIA Level		:	V5R15
+' 	Reg. Settings	:	Russian
+'	Revision			:	20071127
+' 	****************************************************************************
+
+
+'	DEFINE PROPERTIES
+' 	****************************************************************************
+'	Variable names created by Naming Conventions in V5Automation guide:
+'	prefix o- mean Object, d- Double, s- String, a- Array
+' 	****************************************************************************
+
+
+Public oDocument	As DrawingDocument
+Public oSelection		As Selection
+Public oSheet			As DrawingSheet
+Public oView				As DrawingView
+Public oDrwTexts		As DrawingTexts
+Public oArrows			As DrawingArrows
+Public oText				As DrawingText
+
+Public oFactory		As Factory2D
+Public oLine				As Line2D
+Public oCircle			As Circle2D
+Public oArc				As Circle2D
+
+Public oGeomElements		As GeometricElements
+
+Public FrontWeld							As Variant
+Public RearWeld							As Variant
+Public Category							As Variant	' КАТЕГОРИЯ КОНТРОЛЯ ШВА
+Public FIELDWELD						As Variant 	' ШОВ ПРИ МОНТАЖЕ
+Public WELDALLAROUND				As Variant	' ШОВ ПО ЗАМКНУТОЙ ЛИНИИ
+Public OPENEDLINEWELD			As Variant	' ШОВ ПО НЕЗАМКНУТОЙ ЛИНИИ
+Public FLUSHWELD						As Variant	' УСИЛЕНИЕ ШВА СНЯТЬ
+Public SMOOTHFACE					As Variant	' ОБРАБОТАТЬ НАПЛЫВЫ И НЕРОВНОСТИ
+Public REVERSEARROW				As Variant	' РАЗМЕСТИТЬ СТРЕЛКУ С ДРУГОЙ СТОРОНЫ ОТ ВЫНОСНОЙ ЛИНИИ
+
+
+	' GLOBAL VARIABLES
+Public sAnchorPos					As String
+Public sSymbolPositionType		As String
+Public dScale 							As Double
+Public dViewAngle					As Double
+Public dEndX 							As Double
+Public dEndY							As Double
+
+	' INIT VALUES
+FrontWeld = Empty
+RearWeld = Empty
+Category = Empty
+FIELDWELD = Empty
+WELDALLAROUND = Empty
+OPENEDLINEWELD = Empty
+FLUSHWELD = Empty
+SMOOTHFACE = Empty
+REVERSEARROW = Empty
+
+	' STATIC VARIABLES
+Public dTextSize			As Double
+Public dLineW				As Double
+Public dOffsetX			As Double
+Public dRadius				As Double
+Public dAssemblyW		As Double
+Public dAssemblyH		As Double
+Public PI						As Double
+Public dHeadLength		As Double
+Public dDeltaAngle		As Double
+Public dSymbolSize		As Double
+
+
+	' STATIC VALUES
+dTextSize = 3.5		' TEXT HEIGHT
+dLineW = 1				' LINE THICKNESS FOR ALL PIECES OF WELD DESCR
+dOffsetX = 5			' H-OFFSET FOR TEXT FROM ARROW TAIL - FOR FIT SPEC SYMBOLS
+dRadius = 1.5			' CIRCLE RADIUS FOR SPECIAL WELD SYMBOL - Weld all around
+PI = 3.1415926
+dHeadLength = 4	' ARROW HEADLINE LENGTH
+dDeltaAngle	= 10		' ANGLE BETWEEN ARROW LINE AND ARROW HEADLINE
+dSymbolSize = 3.5	' DIMENSION FOR ADD-ON SYMBOLS: Field weld, Flush weld, Smooth blended faces, Opened line weld
+
+
+Public aNotifyText			As Array
+Public aNotifyIcon			As Array
+aNotifyText = Array("Reserved", "Внимание!"&Chr(10)&"Не указано условное обозначение сварного шва"&Chr(10)&"Возможно, после ввода текста не нажали кнопку 'Set'", "Внимание!"&Chr(13)&"Для этого макроса требуется создать чертежный документ (Drawing)")
+aNotifyIcon = Array(vbInformation, vbExclamation, vbExclamation)
+
+
+'	CORE METHODS - UserNotify
+' 	****************************************************************************
+'	Shows message box with predefined text for some events
+' 	****************************************************************************
+Sub UserNotify (iNotifyID As Integer)
+	MsgBox aNotifyText(iNotifyID), aNotifyIcon(iNotifyID), "CATScript Message:"
+End Sub
+
+
+'	CORE METHODS - WriteWeldDescr
+' 	****************************************************************************
+'	Add text string object with predefined parameters
+' 	****************************************************************************
+Sub WriteWeldDescr (textName, textValue, anchorPos As String, textX, textY, textAngle As Double)
+	Set oText = oDrwTexts.Add(textValue, textX, textY)
+	oText.Name = textName
+	oText.SetFontSize  0, 0, dTextSize
+	oText.Angle =  textAngle
+	oText.AnchorPosition = anchorPos
+	oText.FrameType = catRectangle
+	oText.WrappingWidth = 0
+End Sub
+
+
+'	CORE METHODS - DrawLine
+' 	****************************************************************************
+'	Add line object with predefined parameters - start point and end point
+' 	****************************************************************************
+Sub DrawLine (lineName As String, startX, startY, endX, endY As Double)
+	Set oLine = oFactory.CreateLine(startX, startY, endX, endY)
+	oLine.Name = lineName
+	oSelection.Clear
+	oSelection.Add(oLine)
+	oSelection.VisProperties.SetRealWidth dLineW, 1
+	oSelection.Clear
+End Sub
+
+
+'	CORE METHODS - DrawLine2
+' 	****************************************************************************
+'	Add line object with predefined parameters - start point, length and angle
+' 	****************************************************************************
+Sub DrawLine2 (lineName As String, X, Y, L, A As Double)
+	Dim dLineEndX	As Double
+	Dim dLineEndY	As Double
+
+	dLineEndX = X +L*Cos(A)
+	dLineEndY = Y + L*Sin(A)
+
+	DrawLine lineName, X, Y, dLineEndX, dLineEndY
+End Sub
+
+
+'	CORE METHODS - DrawCircle
+' 	****************************************************************************
+'	Add circle object with predefined parameters
+' 	****************************************************************************
+Sub DrawCircle (circleName As String, X, Y, R As Double)
+	Set oCircle = oFactory.CreateClosedCircle(X, Y, R)
+	oCircle.Name = circleName
+	oSelection.Clear
+	oSelection.Add(oCircle)
+	oSelection.VisProperties.SetRealWidth dLineW, 1
+	oSelection.Clear
+End Sub
+
+
+'	CORE METHODS - DrawArc
+' 	****************************************************************************
+'	Add arc object with predefined parameters
+' 	****************************************************************************
+Sub DrawArc (arcName As String, X, Y, R, startPoint, endPoint As Double)
+	Set oArc = oFactory.CreateCircle(X, Y, R, startPoint, endPoint)
+	oArc.Name = arcName
+	oSelection.Clear
+	oSelection.Add(oArc)
+	oSelection.VisProperties.SetRealWidth dLineW, 1
+	oSelection.Clear
+End Sub
+
+
+'	CORE METHODS - CATInit
+' 	****************************************************************************
+'	Set variables
+' 	****************************************************************************
+Sub CATInit ()
+	Set oDocument = CATIA.ActiveDocument
+	Set oSheet = oDocument.Sheets.ActiveSheet
+	Set oSelection = oDocument.Selection
+	Set oView  = oSheet.Views.ActiveView
+	Set oDrwTexts = oView.Texts
+	Set oArrows	 = oView.Arrows
+	Set oFactory = oView.Factory2D
+	Set oGeomElements = oView.GeometricElements
+
+	' OVERRIDE STATIC VALUES FOR SHEETSCALE:
+	dScale = oView.Scale
+	dOffsetX = Round(dOffsetX/dScale, 2)
+	dRadius = Round(dRadius/dScale, 2)
+	dAssemblyW = Round(dAssemblyW/dScale, 2)
+	dAssemblyH = Round(dAssemblyH/dScale, 2)
+	dHeadLength = Round(dHeadLength/dScale, 2)
+	dSymbolSize = Round(dSymbolSize/dScale, 2)
+
+	' DEFINE ANGLE OF ACTIVE VIEW
+	dViewAngle = oView.Angle
+End Sub
+
+
+'	CORE METHODS - CATExit
+' 	****************************************************************************
+'	Save edition in order to register modification for UNDO/REDO
+' 	****************************************************************************
+Sub CATExit ()
+	oView.SaveEdition
+End Sub
+
+
+'	CORE METHODS - CATMain
+' 	****************************************************************************
+'	Invoked on script start
+' 	****************************************************************************
+Sub CATMain (FrontWeld, RearWeld, Category, FIELDWELD, WELDALLAROUND, OPENEDLINEWELD, FLUSHWELD, SMOOTHFACE, REVERSEARROW)
+	If (IsDrawingDocument()) Then
+		CATInit
+		Dim Status					As String
+		Dim oStartPoint(1)		As Object
+		Dim oPositionPoint(1)	As Object
+		Dim dStartX					As Double
+		Dim dStartY					As Double
+		Dim dNextX					As Double
+		Dim dNextY					As Double
+
+		Dim lTotalText				As Long
+		Dim lStepText				As Long
+		Dim oTargetText			As DrawingText
+		Dim sTextName			As String
+
+		Dim oInputObjectType(0)	As Object
+
+		Dim iWeldID							As Integer
+		Dim sFrontWeldDescr			As String
+		Dim sRearWeldDescr			As String
+		Dim sWeldDescr					As String
+		Dim sCategory						As String
+
+		sFrontWeldDescr = CStr(FrontWeld)
+		sRearWeldDescr = CStr(RearWeld)
+		sCategory = CStr(Category)
+
+
+		' CHECK FOR EXISTING WELD DESCR
+		iWeldID = 1
+		sTextName = "w_text_descr_"
+		lTotalText = oDrwTexts.Count
+		For lStepText = 1 To  lTotalText
+			Set oTargetText = oDrwTexts.Item(lStepText)
+			If (Left(oTargetText.Name, 13) = sTextName) Then
+				iWeldID = iWeldID + 1
+			End If
+		Next
+
+	
+		' PROCEED USER INPUT
+		' EMPTY VARIANT VAR AFTER CSTR() METHOD CONVERTS TO "0"
+		If (sFrontWeldDescr <> "" And sFrontWeldDescr <> "0") Then
+			sAnchorPos = catBottomLeft
+			sWeldDescr = sFrontWeldDescr
+			sSymbolPositionType = "Front"
+		ElseIf (sRearWeldDescr <> "" And sRearWeldDescr <> "0") Then
+			sAnchorPos = catTopLeft
+			sWeldDescr = sRearWeldDescr
+			sSymbolPositionType = "Rear"
+		Else
+			' USER NOT INPUT ANY  DATA
+			UserNotify 1
+			Exit Sub
+		End If
+
+
+		' ASK USER - SPECIFY START POINT
+		Status = oDocument.Indicate2D("Укажите сварной шов", oStartPoint)
+		if (Status = "Cancel" Or Status = "Undo" Or Status = "Redo") Then Exit Sub
+		dStartX = Round(oStartPoint(0), 0)
+		dStartY = Round(oStartPoint(1), 0)
+
+		WriteWeldDescr "w_text_descr_"+CStr(iWeldID), sWeldDescr, sAnchorPos, dStartX+dOffsetX, dStartY, 0
+
+		' USING CAT ARROW OBJECT
+		Dim oArrow As DrawingArrow
+		Set oArrow = oView.Arrows.Add(dStartX, dStartY, dStartX, dStartY)
+		oArrow.HeadSymbol = catNotUsed
+		oArrow.Name = "w_arrow_"+CStr(iWeldID)
+
+		Status = "MouseMove"
+		oInputObjectType(0) = "Point2D"
+
+		' TRACK WHEN USER SELECT POSITION FOR DESCRIPTION
+		Do While (Status = "MouseMove")
+			Status =  oSelection.IndicateOrSelectElement2D("Укажите место для обозначения шва", oInputObjectType, False, False, True, False, oPositionPoint)
+			dNextX = Round(oPositionPoint(0), 0)
+			dNextY = Round(oPositionPoint(1), 0)
+
+			' MOVE TAIL OF ARROW
+			oArrow.ModifyPoint 2, dNextX, dNextY
+
+			' MOVE TEXT ON ATTITUDE TO ANGLE OF VIEW
+			oText.X = dNextX + Round(dOffsetX*Cos(-1*dViewAngle), 2)
+			oText.Y = dNextY + Round(dOffsetX*Sin(-1*dViewAngle), 2)
+
+			If (Status = "Cancel" Or Status = "Undo" Or Status = "Redo") Then Exit Do
+		Loop
+
+		' CONNECT TAIL OF ARROW WITH TEXT
+		oArrow.TailTarget = oText
+
+		' ADD VALUES TO GLOBAL VARs dEndX, dEndY
+		oArrow.GetPoint 2, dEndX, dEndY
+
+
+		' VALUE FOR EXTEND H-LINE UNDER/OVER SYMBOLS
+		Dim dDescrLineWidth	As Double
+		dDescrLineWidth = dOffsetX + Round((oText.WrappingWidth + 1)/dScale, 2)
+
+
+		' THIS SYMBOL SET BEFORE TEXT
+		' ADD SYMBOL "FIELD WELD", IF USER CHOISES IT
+		If (CStr(FIELDWELD) <> "" And CStr(FIELDWELD) <> "0") Then
+			AddFieldWeldSymbol iWeldID
+		End If
+
+
+		' THIS SYMBOL SET BEFORE TEXT
+		' ADD SYMBOL "WELD ALL AROUND", IF USER CHOISES IT
+		If (CStr(WELDALLAROUND) <> "" And CStr(WELDALLAROUND) <> "0") Then
+			AddWeldAllAroundSymbol iWeldID
+		End If
+
+
+		' THIS SYMBOL SET AFTER TEXT
+		' ADD OPENED LINE WELD SYMBOL, IF USER DEFINE IT
+		If (CStr(OPENEDLINEWELD) <> "" And CStr(OPENEDLINEWELD) <> "0") Then
+			AddOpenLineSymbol iWeldID, dDescrLineWidth
+
+			' EXTEND H-LINE FOR SYMBOL
+			dDescrLineWidth = dDescrLineWidth + 2*dSymbolSize + Round(1/dScale, 2)
+		End If
+
+
+		' THIS SYMBOL SET AFTER TEXT
+		' ADD "FLUSH WELD" -  REINFORCEMENT OUT SYMBOL, IF USER DEFINE IT
+		If (CStr(FLUSHWELD) <> "" And CStr(FLUSHWELD) <> "0") Then
+			AddFlushWeldSymbol iWeldID, dDescrLineWidth
+	
+			' EXTEND H-LINE FOR SYMBOL
+			dDescrLineWidth = dDescrLineWidth + dSymbolSize*1.5 + Round(1/dScale, 2)
+		End If
+
+
+		' THIS SYMBOL SET AFTER TEXT
+		' ADD "SMOOTH BLENDED FACE" SYMBOL, IF USER DEFINE IT
+		If (CStr(SMOOTHFACE) <> "" And CStr(SMOOTHFACE) <> "0") Then
+			AddSmoothFaceSymbol iWeldID, dDescrLineWidth
+	
+			' EXTEND H-LINE FOR SYMBOL
+			dDescrLineWidth = dDescrLineWidth + 2*dSymbolSize + Round(1/dScale, 2)
+		End If
+
+
+		' THIS CHANGES SIDE OF ARROW HEAD, IF USER SELECT IT
+		Dim dArrowMode	As Double
+		If (CStr(REVERSEARROW) <> "" And CStr(REVERSEARROW) <> "0") Then
+			dArrowMode = -1
+		Else
+			dArrowMode = 1
+		End If
+
+
+		' ADD H-LINE UNDER/OVER TEXT AND KATET DESCRIPTION
+		DrawLine2 "w_line_"+CStr(iWeldID), dEndX, dEndY, dDescrLineWidth, -1*dViewAngle
+	
+
+		' COMPUTE ANGLE AND MODULE IN EXT. FUNCTION AND RETURN IN ARRAY
+		Dim dReturned		As Array
+		Dim dHeadAngle	As Double
+		dReturned = ArrowAngle(dStartX, dStartY, dEndX, dEndY)
+		dHeadAngle = (dReturned(0))*PI/180 + dReturned(1)*dDeltaAngle*(PI/180)*dArrowMode
+
+
+		' ADD ARROW HEAD ACCORDING WITH ANGLE OF ARROW LINE
+		DrawLine2 "w_head_"+CStr(iWeldID), dStartX, dStartY, dHeadLength, dHeadAngle
+
+
+		' ADD CONTROL CATEGORY DESCRIPTION, IF USER DEFINE IT
+		Dim dCatTextX			As Double
+		Dim dCatTextY			As Double
+		Dim dCatTextAngle	As Double
+
+		dCatTextX = dStartX + (dEndX - dStartX)/2
+		dCatTextY = dStartY + (dEndY - dStartY)/2
+
+		If (dReturned(0) > 90 And dReturned(0) < 270) Then
+			dCatTextAngle = dReturned(0) - 180 - dViewAngle*180/PI
+		Else
+			dCatTextAngle = dReturned(0) - dViewAngle*180/PI
+		End If
+
+		If (CStr(sCategory) <> "" And CStr(sCategory) <> "0") Then
+			WriteWeldDescr "w_text_ccat_"+CStr(iWeldID), sCategory, catBottomCenter, dCatTextX, dCatTextY, dCatTextAngle
+		End If
+
+		CATExit
+	Else
+		UserNotify 2
+		Exit Sub
+	End If
+End Sub
+
+
+'	BASIC METHODS - AddFieldWeldSymbol
+' 	****************************************************************************
+'	Method that add symbol for "field weld" - weld by assembly
+' 	****************************************************************************
+Sub AddFieldWeldSymbol(ID As Integer)
+	Dim dHLineX		As Double
+	Dim dHLineY		As Double
+
+	dHLineX = dEndX - Round(1.5*dSymbolSize*Sin(-1*dViewAngle), 2)
+	dHLineY = dEndY + Round(1.5*dSymbolSize*Cos(-1*dViewAngle), 2)
+
+	' ADD V-LINE
+	DrawLine2 "w_symb_assy_line1_"+CStr(ID), dEndX, dEndY, 1.5*dSymbolSize, PI/2 - dViewAngle
+
+	' ADD H-LINE
+	DrawLine2 "w_symb_assy_line2_"+CStr(ID), dHLineX, dHLineY, dSymbolSize, PI - dViewAngle
+End Sub
+
+
+'	BASIC METHODS - AddWeldAllAroundSymbol
+' 	****************************************************************************
+'	Method that add symbol for "weld all around" - closed line weld
+' 	****************************************************************************
+Sub AddWeldAllAroundSymbol (ID As Integer)
+	DrawCircle "w_symb_closed_"&CStr(ID), dEndX, dEndY, dRadius
+End Sub
+
+
+'	BASIC METHODS - AddOpenLineSymbol
+' 	****************************************************************************
+'	Method that add symbol for "opened weld line" in weld description
+' 	****************************************************************************
+Sub AddOpenLineSymbol (ID As Integer, X As Double)
+	Dim aStartPoint1	As Array
+	Dim aStartPoint2	As Array
+	Dim aStartPoint3	As Array
+	Dim dSymbolY		As Double
+	
+	If (sSymbolPositionType = "Front") Then
+		dSymbolY = Round(1/dScale, 2)
+	ElseIf (sSymbolPositionType = "Rear") Then
+		dSymbolY = -1*dSymbolSize - Round(1/dScale, 2)
+	Else
+		Exit Sub
+	End If
+
+	' TRACK START POINT FOR EACH PIECE OF SYMBOL
+	aStartPoint1 = GetStartPoint(X, dSymbolY)
+	aStartPoint2 = GetStartPoint(X + 2*dSymbolSize, dSymbolY)
+	aStartPoint3 = GetStartPoint(X + 2*dSymbolSize, dSymbolY + dSymbolSize)
+
+	' ADD BOTTOM H-LINE
+	DrawLine2 "w_symb_open_line1_"+CStr(ID), aStartPoint1(0), aStartPoint1(1), 2*dSymbolSize, 0 - dViewAngle
+
+	' ADD V-LINE
+	DrawLine2 "w_symb_open_line2_"+CStr(ID), aStartPoint2(0), aStartPoint2(1), dSymbolSize, PI/2 - dViewAngle
+
+	' ADD TOP H-LINE
+	DrawLine2 "w_symb_open_line3_"+CStr(ID), aStartPoint3(0), aStartPoint3(1), 2*dSymbolSize, PI - dViewAngle
+End Sub
+
+
+'	BASIC METHODS - AddFlushWeldSymbol
+' 	****************************************************************************
+'	Method that add symbol for "flush weld" - reinforcement out in weld description
+' 	****************************************************************************
+Sub AddFlushWeldSymbol (ID As Integer, X As Double)
+	Dim aStartPoint1	As Array
+	Dim aStartPoint2	As Array
+	Dim dSymbolY		As Double
+	Dim dRadius			As Double
+
+	' INCREASE/DECREASE COEFFICIENT
+	Dim K	As Double
+
+	dRadius = dSymbolSize/2
+
+	If (sSymbolPositionType = "Front") Then
+		K = 1
+	ElseIf (sSymbolPositionType = "Rear") Then
+		K = -1
+	Else
+		Exit Sub
+	End If
+
+	dSymbolY = Round(1/dScale, 2)*K
+
+	' TRACK START POINT FOR EACH PIECE OF SYMBOL
+	aStartPoint1 = GetStartPoint(X, dSymbolY)
+	aStartPoint2 = GetStartPoint(X + dSymbolSize*0.75, dSymbolY + dRadius*K)
+
+	' ADD LINE
+	DrawLine2 "w_symb_rfout_line_"+CStr(ID), aStartPoint1(0), aStartPoint1(1), 1.5*dSymbolSize, 0 - dViewAngle
+
+	' ADD CIRCLE
+	DrawCircle "w_symb_rfout_circle_"&CStr(ID), aStartPoint2(0), aStartPoint2(1), dRadius
+End Sub
+
+
+'	BASIC METHODS - AddSmoothFaceSymbol
+' 	****************************************************************************
+'	Method that add symbol for "smooth blended face" in weld description
+' 	****************************************************************************
+Sub AddSmoothFaceSymbol (ID As Integer, X As Double)
+	Dim aStartPoint1		As Array
+	Dim aStartPoint2		As Array
+	Dim aStartPoint3		As Array
+	Dim dSymbolY			As Double
+	Dim dRadius				As Double
+	Dim dArcStartPoint	As Double
+	Dim dArcEndPoint	As Double
+
+	' INCREASE/DECREASE COEFFICIENT
+	Dim K	As Double
+
+	dRadius = dSymbolSize/2
+	
+	If (sSymbolPositionType = "Front") Then
+		K = 1
+		' ARC FROM 180 TO 360 DEGREES: III - IV QUARTER
+		dArcStartPoint = PI - dViewAngle
+		dArcEndPoint = 2*PI - dViewAngle
+	ElseIf (sSymbolPositionType = "Rear") Then
+		K = -1
+		' ARC FROM 0 TO 180 DEGREES: I - II QUARTER
+		dArcStartPoint = 0 - dViewAngle
+		dArcEndPoint = PI - dViewAngle
+	Else
+		Exit Sub
+	End If
+
+	dSymbolY = Round(1/dScale, 2)*K
+
+	' TRACK START POINT FOR EACH PIECE OF SYMBOL
+	aStartPoint1 = GetStartPoint(X, dSymbolY)
+	aStartPoint2 = GetStartPoint(X + dRadius, dSymbolY + dRadius*K)
+	aStartPoint3 = GetStartPoint(X + 3*dRadius, dSymbolY + dRadius*K)
+
+	' ADD LINE
+	DrawLine2 "w_symb_jagout_line_"+CStr(ID), aStartPoint1(0), aStartPoint1(1), 2*dSymbolSize, 0 - dViewAngle
+
+	' ADD FIRST ARC
+	DrawArc "w_symb_jagout_arc1_"&CStr(ID), aStartPoint2(0), aStartPoint2(1), dRadius, dArcStartPoint, dArcEndPoint
+
+	' ADD SECOND ARC
+	DrawArc "w_symb_jagout_arc2_"&CStr(ID), aStartPoint3(0), aStartPoint3(1), dRadius, dArcStartPoint, dArcEndPoint
+End Sub
+
+
+'	SUPPORT METHODS - ArrowAngle
+' 	****************************************************************************
+'	Method that compute arrow angle and module for head symbol position
+' 	****************************************************************************
+Function ArrowAngle (startX, startY, endX, endY As Double) As Array
+	Dim dArrowAngle 	As Double
+	Dim dOppositeSide	As Double
+	Dim dAdjacentSide	As Double
+	Dim dModule			As Double
+
+	dAdjacentSide = endX - startX
+	dOppositeSide = endY - startY
+
+	If (dAdjacentSide = 0) Then
+		' PREVENT DIVIDE BY ZERO
+		If (dOppositeSide > 0) Then
+				dArrowAngle = 90
+				dModule = 1
+		Else
+				dArrowAngle = 270 
+				dModule = -1
+		End If
+	ElseIf (dAdjacentSide > 0) Then
+		If (dOppositeSide > 0) Then
+			' I-QUARTER
+			dModule = 1
+			dArrowAngle = Round(Atn(dOppositeSide/dAdjacentSide)*(180/PI), 0)
+		Else
+			' IV-QUARTER
+			dModule = 1
+			dArrowAngle = Round((Atn(dOppositeSide/dAdjacentSide) +2*PI)*(180/PI), 0)
+		End If
+	Else
+		dModule = -1
+		dArrowAngle = Round((Atn(dOppositeSide/dAdjacentSide) + PI)*(180/PI), 0)
+
+		' OVERRIDE VALUE OF dModule IF NEED PLACE ARROW HEAD IN OTHER SIDE
+		If (dOppositeSide > 0) Then
+			' II-QUARTER
+			dModule = -1
+		Else
+			' III-QUARTER
+			dModule = -1
+		End If
+	End If
+
+	' RETURN TWO PROPERTIES IN ONE ARRAY
+	ArrowAngle = Array(dArrowAngle, dModule)
+End Function
+
+
+'	SUPPORT METHODS - IsDrawingDocument
+' 	****************************************************************************
+'	Check for active document type
+' 	****************************************************************************
+Function IsDrawingDocument () As Boolean
+	If (TypeName(CATIA.ActiveDocument) = "DrawingDocument") Then
+		IsDrawingDocument = True
+	Else
+		IsDrawingDocument = False
+	End If
+End Function
+
+
+'	SUPPORT METHODS - GetStartPoint
+' 	****************************************************************************
+'	Compute new point coordinates about dEndX and dEndY for rotated view and X <> 0
+' 	****************************************************************************
+Function GetStartPoint (X, Y As Double) As Array
+	Dim finalX		As Double
+	Dim finalY		As Double
+	Dim dHypo	As Double
+
+	dHypo = Sqr(X*X + Y*Y)
+	finalX = dEndX + Round(dHypo*Cos(Atn(Y/X) - dViewAngle), 2)
+	finalY = dEndY + Round(dHypo*Sin(Atn(Y/X) - dViewAngle), 2)
+
+	GetStartPoint = Array(finalX, finalY)
+End Function
