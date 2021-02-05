@@ -2,7 +2,9 @@
 ### This is a script that creates a weld designation in accordance with Russian drafting standards. Tested in V5R15 and V5R19 version.
 
 Place these files "GOSTWELD2.CATScript" and "GOSTWELD2.jpg" in the following folder:
+
 "C:\Program Files\Dassault Systemes\BXX\intel_a\VBScript\FrameTitleBlock"
+
 where XX - CATIA version number (B15, B19 etc).
 
 A small setup guide in Russian in the file "GOSTWELD2_descr_RU.pdf".
